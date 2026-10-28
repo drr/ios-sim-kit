@@ -6,7 +6,7 @@ import { HOME } from "./config.ts";
 import { type Affine, fitAffine, invert, type Pt } from "./fit.ts";
 import { findLights, type Lights, readPng } from "./png.ts";
 import { probe } from "./probe-client.ts";
-import { axe, type Device, isLandscape, orientation, screenshot, sleep } from "./sim.ts";
+import { axe, type Device, failShot, isLandscape, orientation, screenshot, sleep } from "./sim.ts";
 
 /**
  * Records where touches land (`__taps`) and, while `__block` is set, swallows them (calibration taps). iOS WebKit
@@ -155,14 +155,6 @@ function toScreen(k: Calibration, p: Pt): Pt {
 
 const tapAt = (dev: Device, s: Pt) => axe(dev, "tap", `-x=${s.x}`, `-y=${s.y}`);
 
-/** Saves a screenshot for a failure and returns its path. */
-async function failShot(ctx: Ctx, what: string): Promise<string> {
-  mkdirSync(join(HOME, "shots"), { recursive: true });
-  const file = join(HOME, "shots", `${ctx.dev.name}-${what}-${Date.now()}.png`);
-  await screenshot(ctx.dev, file, true).catch(() => {});
-  return file;
-}
-
 interface Box {
   x: number;
   y: number;
@@ -201,7 +193,7 @@ export async function tapEl(ctx: Ctx, selector: string): Promise<Pt> {
     if (t && t.x >= r.x - 2 && t.x <= r.x + r.w + 2 && t.y >= r.y - 2 && t.y <= r.y + r.h + 2) return t;
     forgetCalibration(ctx);
   }
-  throw new Error(`could not tap ${selector}; screenshot: ${await failShot(ctx, "tap-el")}`);
+  throw new Error(`could not tap ${selector}; screenshot: ${await failShot(ctx.dev, "tap-el")}`);
 }
 
 /** A vertical swipe on the page from fraction `from` to `to` of the visible height (up: content scrolls down). */
@@ -287,7 +279,7 @@ async function stillThere(ctx: Ctx, step: string): Promise<void> {
   if (state !== "visible")
     throw new Error(
       `${ctx.dev.name}: the page ${ctx.client} isn't in front any more (${step}); stopped. ` +
-        `Screenshot: ${await failShot(ctx, "window")}`,
+        `Screenshot: ${await failShot(ctx.dev, "window")}`,
     );
 }
 
@@ -334,7 +326,7 @@ export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
     if (!found) {
       if (!MODES.full.is(f))
         throw new Error(
-          `${dev.name}: can't find Safari's window controls; screenshot: ${await failShot(ctx, "window")}`,
+          `${dev.name}: can't find Safari's window controls; screenshot: ${await failShot(ctx.dev, "window")}`,
         );
       // Full screen has no window controls: shrink it to a floating window first.
       const { w, h } = f.screen;
@@ -354,7 +346,7 @@ export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
       found = await lights(ctx, f);
       if (!found)
         throw new Error(
-          `${dev.name}: no window controls after leaving full screen; screenshot: ${await failShot(ctx, "window")}`,
+          `${dev.name}: no window controls after leaving full screen; screenshot: ${await failShot(ctx.dev, "window")}`,
         );
     }
     if (found.gap < 20) {
@@ -363,7 +355,9 @@ export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
       await stillThere(ctx, "after opening the window controls");
       found = await lights(ctx, f);
       if (!found || found.gap < 20)
-        throw new Error(`${dev.name}: the window controls didn't open; screenshot: ${await failShot(ctx, "window")}`);
+        throw new Error(
+          `${dev.name}: the window controls didn't open; screenshot: ${await failShot(ctx.dev, "window")}`,
+        );
     }
     const green = { x: Math.round(found.green.x), y: Math.round(found.green.y) };
     await axe(dev, "touch", `-x=${green.x}`, `-y=${green.y}`, "--down", "--up", "--delay=1.0");
@@ -375,7 +369,7 @@ export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
   const at = f ? `page at ${f.x},${f.y}, ${f.w}x${f.h}` : "unknown";
   throw new Error(
     `${dev.name}: could not put Safari ${mode === "full" ? "full screen" : `in the ${mode}`} (${at}); ` +
-      `screenshot: ${await failShot(ctx, "window")}`,
+      `screenshot: ${await failShot(ctx.dev, "window")}`,
   );
 }
 

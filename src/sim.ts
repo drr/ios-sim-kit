@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { config, HOME } from "./config.ts";
 
@@ -194,7 +195,11 @@ export async function stop(targets?: Device[]): Promise<StopResult> {
   return { shutDown, stillBooted, quitSimulator };
 }
 
-export const openUrl = (dev: Device, url: string) => sh("xcrun", ["simctl", "openurl", dev.udid, url]);
+const SAFARI = "com.apple.mobilesafari";
+
+/** The device's Safari data folder: SafariTabs.db (its open tabs) and the rest of Safari's state. */
+export const safariDir = (dev: Device) =>
+  join(homedir(), "Library", "Developer", "CoreSimulator", "Devices", dev.udid, "data", "Library", "Safari");
 
 /**
  * Quits Safari and deletes its saved tabs (SafariTabs.db in the device's data), so the next `openUrl` is the only
@@ -202,21 +207,126 @@ export const openUrl = (dev: Device, url: string) => sh("xcrun", ["simctl", "ope
  * forward.
  */
 export async function safariReset(dev: Device): Promise<string[]> {
-  await sh("xcrun", ["simctl", "terminate", dev.udid, "com.apple.mobilesafari"]).catch(() => {}); // not running
-  const dir = join(
-    homedir(),
-    "Library",
-    "Developer",
-    "CoreSimulator",
-    "Devices",
-    dev.udid,
-    "data",
-    "Library",
-    "Safari",
-  );
+  await sh("xcrun", ["simctl", "terminate", dev.udid, SAFARI]).catch(() => {}); // not running
+  const dir = safariDir(dev);
   const gone = existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith("SafariTabs.db")) : [];
   for (const f of gone) rmSync(join(dir, f));
   return gone;
+}
+
+export interface Tab {
+  /** Safari's window (iPad can have several), from 1. */
+  window: number;
+  /** Position in its window's tab group, from 0. */
+  index: number;
+  /** The tab its window shows. */
+  active: boolean;
+  private: boolean;
+  url: string;
+  title: string;
+}
+
+/**
+ * Safari's open tabs, read from SafariTabs.db: the tabs (bookmark rows) of the group each window shows (its local
+ * or private tabs; the other group isn't on screen, and the private one always holds a blank Start Page), and the
+ * group's active tab from windows_tab_groups. No db (fresh device, after safari-reset), or one Safari is still
+ * creating, = no tabs.
+ */
+export function readTabs(db: string): Tab[] {
+  if (!existsSync(db)) return [];
+  const conn = new DatabaseSync(db, { readOnly: true });
+  try {
+    const rows = conn
+      .prepare(
+        `SELECT w.id AS window, b.order_index AS idx, b.parent = w.private_tab_group_id AS private,
+                b.id = g.active_tab_id AS active, b.url AS url, b.title AS title
+           FROM windows w
+           JOIN bookmarks b ON b.parent = w.active_tab_group_id
+           LEFT JOIN windows_tab_groups g ON g.window_id = w.id AND g.tab_group_id = b.parent
+          WHERE w.date_closed IS NULL AND b.type = 0 AND b.hidden = 0 AND b.deleted = 0 AND b.date_closed IS NULL
+          ORDER BY w.id, b.order_index`,
+      )
+      .all() as { window: number; idx: number; private: number; active: number | null; url: string; title: string }[];
+    const tabs = rows.map((r) => ({
+      window: r.window,
+      index: r.idx,
+      active: r.active === 1,
+      private: r.private === 1,
+      url: r.url ?? "",
+      title: r.title ?? "",
+    }));
+    // A freshly started Safari saves its one tab before it records which tab is active.
+    for (const w of new Set(tabs.map((t) => t.window))) {
+      const own = tabs.filter((t) => t.window === w);
+      if (own.length === 1 && !own.some((t) => t.active)) (own[0] as Tab).active = true;
+    }
+    return tabs;
+  } catch (e) {
+    if (/no such table/.test(String(e))) return []; // Safari is creating the db
+    throw e;
+  } finally {
+    conn.close();
+  }
+}
+
+export const safariTabs = (dev: Device) => readTabs(join(safariDir(dev), "SafariTabs.db"));
+
+const sameUrl = (a: string, b: string) => URL.canParse(a) && URL.canParse(b) && new URL(a).href === new URL(b).href;
+const activeTab = (tabs: Tab[]) => tabs.find((t) => t.active);
+
+/** Polls SafariTabs.db until `ok(tabs)`; returns the tabs, or null after `ms`. Safari saves a change within ~1s. */
+async function waitTabs(dev: Device, ok: (tabs: Tab[]) => boolean, ms: number): Promise<Tab[] | null> {
+  for (const end = Date.now() + ms; ; await sleep(150)) {
+    const tabs = safariTabs(dev);
+    if (ok(tabs)) return tabs;
+    if (Date.now() > end) return null;
+  }
+}
+
+/**
+ * Opens `url` in the device's Safari and waits until Safari has saved it as the active tab (or another URL, after a
+ * redirect), so a following `openUrl` can't land in the same tab. `simctl openurl` loads into the current tab when
+ * that tab is blank: while Safari is still starting (~2s after the openurl that launched it), or after ⌘T; otherwise
+ * it opens a new tab, or switches to an open one whose URL differs only in the hash. Returns null if Safari didn't
+ * show it within 10s.
+ */
+export async function openUrl(dev: Device, url: string): Promise<Tab[] | null> {
+  const before = safariTabs(dev);
+  const was = activeTab(before)?.url;
+  await sh("xcrun", ["simctl", "openurl", dev.udid, url]);
+  return waitTabs(
+    dev,
+    (tabs) => {
+      const now = activeTab(tabs)?.url;
+      return !!now && (sameUrl(now, url) || now !== was || tabs.length !== before.length);
+    },
+    10_000,
+  );
+}
+
+/**
+ * Opens `url` in a tab of its own: brings Safari to the front in the simulator (no macOS focus change), presses ⌘T
+ * for a blank tab unless the active one is blank already, then opens the URL into it. Checks with SafariTabs.db that
+ * there's one tab more than before with the page active, and returns the tabs.
+ */
+export async function newTab(dev: Device, url: string): Promise<Tab[]> {
+  const fail = async (why: string) => new Error(`${dev.name}: ${why}; screenshot: ${await failShot(dev, "new-tab")}`);
+  await sh("xcrun", ["simctl", "launch", dev.udid, SAFARI]);
+  const start = await waitTabs(dev, (tabs) => activeTab(tabs) !== undefined, 5000);
+  let count = start?.length ?? 0;
+  if (activeTab(start ?? [])?.url !== "") {
+    await axe(dev, "key-combo", "--modifiers", "227", "--key", "23"); // ⌘T: 227 = left ⌘, 23 = t
+    const blank = await waitTabs(dev, (t) => t.length === count + 1 && activeTab(t)?.url === "", 5000);
+    if (!blank) throw await fail(`⌘T didn't open a tab (Safari has ${safariTabs(dev).length}, had ${count})`);
+    count = blank.length;
+  }
+  await sh("xcrun", ["simctl", "openurl", dev.udid, url]);
+  const done = await waitTabs(dev, (t) => t.length === count && !!activeTab(t)?.url, 10_000);
+  if (done) return done;
+  const now = safariTabs(dev);
+  throw await fail(
+    `expected ${count} tabs with the page active, Safari has ${now.length} (active: ${activeTab(now)?.url || "blank"})`,
+  );
 }
 
 /** Runs the configured AXe against the device. */
@@ -275,4 +385,12 @@ export async function screenshot(dev: Device, file: string, upright: boolean): P
   const o = upright ? await orientation(dev) : null;
   const deg = o ? UPRIGHT[o] : 0;
   if (deg) await sh("sips", ["-r", deg, file]);
+}
+
+/** Saves a screenshot for a failure in `HOME/shots/` and returns its path. */
+export async function failShot(dev: Device, what: string): Promise<string> {
+  mkdirSync(join(HOME, "shots"), { recursive: true });
+  const file = join(HOME, "shots", `${dev.name}-${what}-${Date.now()}.png`);
+  await screenshot(dev, file, true).catch(() => {});
+  return file;
 }

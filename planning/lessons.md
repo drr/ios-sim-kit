@@ -19,6 +19,12 @@ Things tried while building ios-sim, kept so nobody retries them.
   listeners were added after its last repaint. WebKit only forwards touches to regions it knows have listeners, and
   it learns of them at a rendering update. Clicks on real buttons still worked, which was confusing. Fix: the
   recorder appends a 1px element and waits two animation frames.
+- **`simctl openurl` into the current tab** (reported by watched-media). `openurl` loads into the current tab when
+  that tab is blank (a Start Page). Right after `open --only` or `safari-reset`, Safari is still starting for ~2s
+  with such a tab, so a second `open` within ~1s replaced the first page: no tab strip, back button enabled.
+  Reproduced at 0 and 1s (2026-10-28, iPad, iOS 26.3); at 2s and later, and back to back with Safari running,
+  each `open` made a tab. `open` now waits until SafariTabs.db shows the URL as the active tab (≤ ~2.2s cold,
+  ~0.3s warm). `--new-tab` uses the same rule on purpose: ⌘T makes a blank tab, then `openurl` fills it.
 - **`simctl openurl` and hashes.** If the URL differs from an open tab's only in its hash, Safari switches to that
   tab and changes the hash without reloading. The page keeps its old probe name, and the new name never connects.
   Use a unique `?t=`.

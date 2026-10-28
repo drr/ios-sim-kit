@@ -42,9 +42,17 @@ test("iPad: boot, probe, rotate, tap, swipe, screenshot, tile, resize and back",
   sim("rotate", DEV, "portrait");
   // A new tab: openurl switches to an open tab whose URL differs only in the hash, without reloading it.
   // A few stale tabs, so Safari shows its tab bar; then ours.
+  // A plain open straight after --only used to land in the same tab (Safari still starting); open now waits for it.
   sim("open", DEV, `${relay}/demo?t=${Date.now()}a`, "--only");
+  assert.equal(sim("tabs", DEV).split("\n").length, 1);
   sim("open", DEV, `${relay}/demo?t=${Date.now()}b`);
-  sim("open", DEV, `${relay}/demo?t=${Date.now()}`, "--probe", CLIENT);
+  assert.equal(sim("open", DEV, `${relay}/demo?t=${Date.now()}`, "--probe", CLIENT, "--new-tab"), `${DEV}: 3 tabs`);
+  const tabs = JSON.parse(sim("tabs", DEV, "--json")) as { active: boolean; url: string }[];
+  assert.deepEqual(
+    tabs.map((t) => t.active),
+    [false, false, true],
+  );
+  assert.match(tabs[2]?.url ?? "", new RegExp(`ios-sim-probe=${CLIENT}`));
   sim("probe", "wait", CLIENT);
   sim("window", DEV, "full", "--probe", CLIENT);
   assert.equal(run<number>("return innerWidth"), 834);

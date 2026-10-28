@@ -1,10 +1,11 @@
 // ios-sim: drive iOS Simulators for checks of web pages and apps, without the user's mouse. See skill/SKILL.md.
 // Runs on the pinned node with type stripping; no dependencies.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
-import { config, HOME } from "./config.ts";
+import { config } from "./config.ts";
+import { doctor, version } from "./doctor.ts";
+import { capture, FEEDBACK_DIR, fileReport, listReports, record } from "./feedback.ts";
 import { setWindow, setWindowWidth, swipePage, tapEl, WINDOW_MODES, type WindowMode } from "./page.ts";
 import { clients, ensureRelay, probe, relayUrl, stopRelay, waitForClient, withProbeName } from "./probe-client.ts";
 import { probeName } from "./probe-hub.ts";
@@ -15,52 +16,18 @@ import {
   devices,
   ensure,
   isOrientation,
+  newTab,
   ORIENTATIONS,
   openUrl,
   orientation,
   resolve,
   rotate,
   safariReset,
+  safariTabs,
   screenshot,
-  sh,
   sleep,
   stop,
 } from "./sim.ts";
-
-const XCODE_DEV = "/Applications/Xcode.app/Contents/Developer";
-
-async function tryRun(cmd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
-  try {
-    return { ok: true, out: await sh(cmd, args) };
-  } catch (e) {
-    return { ok: false, out: (e instanceof Error ? e.message : String(e)).split("\n")[0] ?? "" };
-  }
-}
-
-/** Checks everything the skill relies on; exit status 1 if anything is missing. */
-async function doctor(): Promise<number> {
-  const cfg = config();
-  const checks: [string, boolean, string][] = [];
-  const sel = await tryRun("xcode-select", ["-p"]);
-  checks.push(["xcode-select points at Xcode", sel.out === XCODE_DEV, sel.out]);
-  const runtimes = await tryRun("xcrun", ["simctl", "list", "runtimes", "-j"]);
-  const ios = runtimes.ok
-    ? (JSON.parse(runtimes.out) as { runtimes: { name: string; isAvailable: boolean }[] }).runtimes
-        .filter((r) => r.isAvailable && r.name.startsWith("iOS"))
-        .map((r) => r.name)
-    : [];
-  checks.push(["an iOS Simulator runtime", ios.length > 0, ios.join(", ") || runtimes.out]);
-  const ax = await tryRun(cfg.axe, ["--version"]);
-  checks.push([`axe (${cfg.axe})`, ax.ok, ax.out]);
-  // Rotation goes through `axe rotate` (axe-patched), which needs neither Simulator's menus nor Accessibility.
-  const rot = await tryRun(cfg.axe, ["rotate", "--help"]);
-  checks.push(["axe supports rotate (axe-patched)", rot.ok, rot.ok ? "" : rot.out]);
-  const file = join(HOME, "config.json");
-  checks.push(["config", true, `${existsSync(file) ? file : "defaults"}; prefix ${cfg.prefix || "(none)"}`]);
-  checks.push(["probe relay port", true, `${cfg.probePort}`]);
-  for (const [what, ok, detail] of checks) console.log(`${ok ? "ok " : "!! "} ${what}${detail ? `: ${detail}` : ""}`);
-  return checks.every(([, ok]) => ok) ? 0 : 1;
-}
 
 /**
  * Runs the tap recorder (src/tap-recorder.mjs, vendored verbatim from the AXe fork's planning/) in this node, with
@@ -86,6 +53,8 @@ const USAGE = `usage: ios-sim <command>   (DEVICE = a simulator's name or UDID)
                                booted, also quit Simulator and the probe relay. Keeps calibrations and screenshots
   open DEVICE URL              open a URL in the device's Safari [--probe NAME: add ios-sim-probe=NAME to it]
                                [--only: safari-reset first, so it's the only tab]
+                               [--new-tab: ⌘T first, so it's in a tab of its own; checks the count]
+  tabs DEVICE                  Safari's open tabs: * (active), URL, title [--json]
   safari-reset DEVICE          quit Safari and delete its saved tabs
   rotate DEVICE ORIENTATION    portrait | landscape-left | landscape-right | portrait-upside-down; waits until done
   orientation DEVICE           print the device's orientation
@@ -110,6 +79,9 @@ const USAGE = `usage: ios-sim <command>   (DEVICE = a simulator's name or UDID)
   tap-check DEVICE [--origin X,Y --size WxH] [--grid CxR]   tap a grid on a test page; PASS if taps land where sent
   gesture-check DEVICE [--origin X,Y --size WxH]            swipe and drag; PASS if the page saw the deltas sent
   tap-serve [--port 4319]      the tap recorder page alone (state at /state)
+  feedback --title T < BODY    file a bug or request for ios-sim-kit; prints the report's path
+                               [--kind bug|request] [--project NAME] [--attach FILE]... [--history N|all]
+  feedback --list              open reports
   version    print the installed version`;
 
 /** Numbers for axe, from command-line strings; throws on anything else. */
@@ -124,8 +96,11 @@ async function main(argv: string[]): Promise<number> {
   const opts = <O extends ParseArgsOptionsConfig>(options: O) =>
     parseArgs({ args: rest, options, allowPositionals: true });
   switch (cmd) {
-    case "doctor":
-      return doctor();
+    case "doctor": {
+      const d = await doctor();
+      for (const line of d.lines) console.log(line);
+      return d.ok ? 0 : 1;
+    }
     case "devices":
       for (const d of await devices()) console.log(`${d.name}\t${d.udid}\t${d.state}\t${d.runtime}`);
       return 0;
@@ -155,12 +130,27 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "open": {
-      const { values, positionals } = opts({ probe: { type: "string" }, only: { type: "boolean" } });
+      const { values, positionals } = opts({
+        probe: { type: "string" },
+        only: { type: "boolean" },
+        "new-tab": { type: "boolean" },
+      });
       const dev = await resolve(positionals[0]);
-      if (!positionals[1]) throw new Error("open DEVICE URL [--probe NAME] [--only]");
+      if (!positionals[1]) throw new Error("open DEVICE URL [--probe NAME] [--only | --new-tab]");
+      if (values.only && values["new-tab"]) throw new Error("open takes --only or --new-tab, not both");
       if (values.only) await safariReset(dev);
       const url = values.probe ? withProbeName(positionals[1], probeName(values.probe)) : positionals[1];
-      await openUrl(dev, url);
+      const tabs = values["new-tab"] ? await newTab(dev, url) : await openUrl(dev, url);
+      if (tabs) console.log(`${dev.name}: ${tabs.length} tab${tabs.length === 1 ? "" : "s"}`);
+      else console.error(`ios-sim: ${dev.name}: Safari didn't show ${url} as its tab within 10s; take a screenshot`);
+      return 0;
+    }
+    case "tabs": {
+      const { values, positionals } = opts({ json: { type: "boolean" } });
+      const dev = await resolve(positionals[0]);
+      const tabs = safariTabs(dev);
+      if (values.json) console.log(JSON.stringify(tabs));
+      else for (const t of tabs) console.log(`${t.active ? "*" : " "}\t${t.url}\t${t.title}`);
       return 0;
     }
     case "safari-reset": {
@@ -298,11 +288,44 @@ async function main(argv: string[]): Promise<number> {
       return tapRecorder("gesture", rest);
     case "tap-serve":
       return tapRecorder("serve", rest);
-    case "version": {
-      const file = new URL("../VERSION", import.meta.url);
-      console.log(existsSync(file) ? readFileSync(file, "utf8").trim() : "dev");
+    case "feedback": {
+      const { values } = opts({
+        title: { type: "string" },
+        kind: { type: "string", default: "bug" },
+        project: { type: "string" },
+        attach: { type: "string", multiple: true },
+        history: { type: "string", default: "20" },
+        list: { type: "boolean" },
+      });
+      if (values.list) {
+        const open = listReports();
+        console.log(open.length ? open.join("\n") : `no open reports in ${FEEDBACK_DIR}`);
+        return 0;
+      }
+      const usage = "feedback --title T [--kind bug|request] [--project NAME] [--attach FILE]... < body.md";
+      if (!values.title) throw new Error(usage);
+      if (values.kind !== "bug" && values.kind !== "request") throw new Error(usage);
+      const runs = values.history === "all" ? "all" : Number(values.history);
+      if (runs !== "all" && !(Number.isInteger(runs) && runs >= 0)) throw new Error("--history N|all");
+      if (process.stdin.isTTY) throw new Error(`${usage}: pipe the body (steps, expected, actual) on stdin`);
+      const body = readFileSync(0, "utf8");
+      if (!body.trim())
+        throw new Error("the body (stdin) is empty: describe the steps, what you expected, what happened");
+      console.log(
+        await fileReport({
+          title: values.title,
+          kind: values.kind,
+          project: values.project,
+          body,
+          attach: values.attach ?? [],
+          runs,
+        }),
+      );
       return 0;
     }
+    case "version":
+      console.log(version());
+      return 0;
     case undefined:
     case "help":
     case "--help":
@@ -365,9 +388,16 @@ async function probeCommand(args: string[]): Promise<number> {
   }
 }
 
+// Every run but these goes into the history that feedback reports quote.
+const UNRECORDED = new Set([undefined, "help", "--help", "version", "feedback"]);
+const argv = process.argv.slice(2);
+const output = capture();
+let exit: number;
 try {
-  process.exitCode = await main(process.argv.slice(2));
+  exit = await main(argv);
 } catch (e) {
   console.error(`ios-sim: ${e instanceof Error ? e.message : String(e)}`);
-  process.exitCode = 1;
+  exit = 1;
 }
+process.exitCode = exit;
+if (!UNRECORDED.has(argv[0])) record({ argv, exit, out: output() });

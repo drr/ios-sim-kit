@@ -8,10 +8,17 @@
     Collinear and singular inputs are refused.
   - `test/png.test.ts`: the decoder (none, sub and up filters) and `findLights` (closed and open lights, a teal
     decoy, the region, a missing green) on synthesized PNGs.
+  - `test/tabs.test.ts`: `readTabs` on synthesized SafariTabs.db files: no db, a db without tables, the shown
+    group's tabs in order with the active one, hidden/deleted/closed tabs left out, a lone tab with no active row,
+    a window showing its private group.
+  - `test/feedback.test.ts`: the history (exit codes, output, which commands aren't recorded, the trim at 1100 to
+    1000), a report (frontmatter, body, doctor, devices, the last N of this session's runs, attachments and a
+    named failure screenshot copied, the `-2` suffix, `--list`), and refusals that write nothing.
   - `test/probe.test.ts`: the hub (queueing, timeouts, newer poll, abort), and the relay over HTTP. That covers a
     full run through a fake page, CORS on the page routes only, and `Origin` → 403 on `/run` and `/clients`.
 - `make e2e` (opt-in, `IOS_SIM_E2E=1`): `test/e2e.test.ts` runs `./bin/ios-sim` against `sk-iPadPro11-M4`. The
-  sequence: boot, relay, open `/demo`, full screen, landscape (checked from the page), `tap-el` (click recorded),
+  sequence: boot, relay, open `/demo` three times (`--only`: 1 tab; a plain `open` straight after it; `--new-tab`: 3 tabs, the last
+  active, checked with `tabs`), full screen, landscape (checked from the page), `tap-el` (click recorded),
   `swipe-page` (scrolled), upright screenshot (wider than tall), left half (45–55%), `--width 498` (±4) and `tap-el`
   there, right half (same width as the left), rotate to portrait and `full` (834), back to landscape, a corner drag
   to a floating window and `full` (1210), portrait, `stop`. It opens with `--only` and then adds tabs, so Safari
@@ -66,3 +73,9 @@ landscape and portrait: left/right half and full from each other with five tabs 
 `--width 640` → full → floating → full → left → portrait → full → landscape → right → portrait → left → full, all
 correct; `window` with another tab in front stops in ~4s with a screenshot. `safari-reset` leaves one tab. Device
 isolation: see above.
+
+Round 2 (2026-10-28): `make check` (23 tests), `make e2e` (passed; one earlier run failed only its front-app check,
+with desktop Safari brought forward mid-run, and the rerun kept the front app). By hand: on the iPad, a second
+`open` 0 and 1s after `--only` replaced the first page before the fix; with it, 2 tabs every time. `--new-tab`
+from one tab gives 2, also cold after `safari-reset` and on iPhone 16. In iPad landscape, `100lvh − 100svh` was 29
+with one tab and 71 with two.

@@ -4,9 +4,11 @@
 
 | file | what |
 |---|---|
-| `cli.ts` | argument parsing and dispatch; `doctor` |
+| `cli.ts` | argument parsing and dispatch; records every run in the history |
 | `config.ts` | `IOS_SIM_HOME`, `config()`: `axe`, `prefix`, `probePort` |
-| `sim.ts` | simctl and AXe: `devices`, `resolve` (prefix guard), `ensure`, `boot`, `openUrl`, `safariReset`, `axe`, `orientation`, `rotate`, `screenshot` |
+| `doctor.ts` | `doctor` (its lines and status) and `version`, for the CLI and feedback reports |
+| `sim.ts` | simctl and AXe: `devices`, `resolve` (prefix guard), `ensure`, `boot`, `openUrl`, `newTab`, `safariTabs`/`readTabs`, `safariReset`, `axe`, `orientation`, `rotate`, `screenshot`, `failShot` |
+| `feedback.ts` | the run history (`record`, `capture`), `fileReport`, `listReports` |
 | `png.ts` | PNG decoding (8-bit RGB/RGBA, node's zlib) and `findLights`: the iPad window lights in a screenshot |
 | `fit.ts` | least-squares affine fit page = A·screen + b, `apply`, `invert` |
 | `probe-hub.ts` | job queue between tools and pages (long-poll) |
@@ -101,6 +103,29 @@ Safari ignores touches while WebDriver is attached, so pages fetch their own job
 
 ## Safari's tabs
 
-`safariReset` (`safari-reset`, `open --only`): `simctl terminate` Safari, then delete `SafariTabs.db*` from
-`~/Library/Developer/CoreSimulator/Devices/<udid>/data/Library/Safari/`. The next `openurl` starts Safari with that
-one tab. Verified on iOS 26.3.
+All in `~/Library/Developer/CoreSimulator/Devices/<udid>/data/Library/Safari/SafariTabs.db` (iOS 26.3):
+- `safariReset` (`safari-reset`, `open --only`): `simctl terminate` Safari, then delete `SafariTabs.db*`. The next
+  `openurl` starts Safari with that one tab.
+- `readTabs` (`tabs`) opens it read-only with `node:sqlite` (WAL; Safari saves a change within ~1s). Each
+  `windows` row has `active_tab_group_id` (its `local_tab_group_id` or `private_tab_group_id`), and the tabs are
+  `bookmarks` rows (type 0, not hidden, deleted or closed) with that `parent`, in `order_index`. The private group
+  always holds a blank Start Page, so only the shown group is listed. `windows_tab_groups.active_tab_id` names the
+  active tab; a fresh Safari doesn't write that row until something changes, so a lone tab counts as active. While
+  Safari creates the db its tables are missing: no tabs.
+- `openUrl` waits until the db shows the URL (or any other change of the active tab, e.g. a redirect) for up to 10s;
+  see `lessons.md` for why. `newTab`: `simctl launch` Safari (in front inside the simulator; macOS focus doesn't
+  change), ⌘T (`key-combo --modifiers 227 --key 23`) unless the active tab is blank already, wait for the blank
+  tab, `openurl` into it, and check the count is one more with a URL active.
+
+## History and feedback
+
+Every CLI run but `help`, `version` and `feedback` appends `{at, argv, cwd, session, exit, out}` to
+`$IOS_SIM_HOME/history.jsonl`. `out` is what it printed through `console` (up to 1MB); `axe` and the tap-recorder
+commands print straight to the terminal, so only their exit code is kept. Past 1100 lines the file is cut to the
+last 1000. `feedback` writes `$IOS_SIM_HOME/feedback/<date>-<slug>.md`: frontmatter (title, kind, project, date),
+the body from stdin, attachments and any `shots/` the quoted runs name (copied into `<date>-<slug>/`), version,
+doctor, booted devices with orientations, and the last N runs (this session's if it has any). Reports stay out of this
+repo on purpose: the installed copy mustn't know where the repo is (`verify-install`), and nothing about a report
+should depend on it. Size limits are loose on purpose: screenshots are big, and reports may pile up between dev
+sessions. Nothing is sent
+anywhere or pruned. `make uninstall` removes the history but keeps `feedback/`.

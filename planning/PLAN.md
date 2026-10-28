@@ -54,7 +54,15 @@ the fix for the tiled-mode tab switch (`lessons.md`). Then: window lights found 
 (`png.ts`), the page's frame as the window state, a check before every tap, `safari-reset` / `open --only`, a
 clearer "no answer" error.
 
+Done since (2026-10-28, round 2 from watched-media): `tabs
+DEVICE` (from SafariTabs.db), `open` waits until Safari shows the tab (a plain `open` right after `--only` used to
+replace the first page), `open --new-tab` (⌘T, count checked), and `feedback` with the run history.
+
+## Feedback from other projects
+
+Sessions using the skill file bugs and requests with `ios-sim feedback`; they wait in `~/.config/ios-sim-kit/feedback/`.
+Work through them with the project skill `process-feedback`. A SessionStart hook says when any are waiting.
+
 Ideas, not committed to:
 - `tap-el --scroll`: scroll the element into view first.
-- `ios-sim close-tabs DEVICE`: test runs pile up Safari tabs.
 - Find out why Safari switches tabs in tiled mode (`lessons.md`).

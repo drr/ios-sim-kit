@@ -87,7 +87,8 @@ verify-install:
 	@echo "verify-install: ok (no references to the repo; runs from /)"
 
 # Removes what make install (and the installed CLI at run time) created: a running relay, the code, the wrapper, the
-# skill, and state in ~/.config/ios-sim-kit. Keeps a config.json there (user-written) and never touches axe-patched.
+# skill, and state in ~/.config/ios-sim-kit. Keeps a config.json there (user-written) and feedback/ (reports not yet
+# picked up), and never touches axe-patched.
 uninstall:
 	@port=$$(sed -n 's/.*"probePort": *\([0-9]*\).*/\1/p' "$(CONFIG_DIR)/config.json" 2>/dev/null); \
 	pid=$$(curl -s --max-time 1 "http://127.0.0.1:$${port:-4320}/" | sed -n 's/.*"probe":"ios-sim","pid":\([0-9]*\).*/\1/p'); \
@@ -96,14 +97,14 @@ uninstall:
 	@if [ -e "$(BIN_DIR)/ios-sim" ] && ! grep -qs "ios-sim-kit/src/cli.ts" "$(BIN_DIR)/ios-sim"; then \
 		echo "left $(BIN_DIR)/ios-sim alone: make install didn't write it"; else rm -f "$(BIN_DIR)/ios-sim"; fi
 	rm -rf "$(CONFIG_DIR)/cal" "$(CONFIG_DIR)/shots"
-	rm -f "$(CONFIG_DIR)/relay.json"
-	@rmdir "$(CONFIG_DIR)" 2>/dev/null || echo "kept $(CONFIG_DIR) (config.json; delete it by hand if unwanted)"
+	rm -f "$(CONFIG_DIR)/relay.json" "$(CONFIG_DIR)/history.jsonl" "$(CONFIG_DIR)/history.jsonl.new"
+	@rmdir "$(CONFIG_DIR)" 2>/dev/null || echo "kept $(CONFIG_DIR) (config.json, feedback/; delete by hand if unwanted)"
 	@$(MAKE) --no-print-directory verify-uninstall
 
-# Fails if anything make install is responsible for is still there (a kept config.json is fine).
+# Fails if anything make install is responsible for is still there (a kept config.json or feedback/ is fine).
 verify-uninstall:
 	@left=""; for f in "$(KIT_DIR)" "$(KIT_DIR).new" "$(SKILL_DIR)" "$(CONFIG_DIR)/cal" "$(CONFIG_DIR)/shots" \
-		"$(CONFIG_DIR)/relay.json"; do [ -e "$$f" ] && left="$$left $$f"; done; \
+		"$(CONFIG_DIR)/relay.json" "$(CONFIG_DIR)/history.jsonl"; do [ -e "$$f" ] && left="$$left $$f"; done; \
 	grep -qs "ios-sim-kit/src/cli.ts" "$(BIN_DIR)/ios-sim" && left="$$left $(BIN_DIR)/ios-sim"; \
 	port=$$(sed -n 's/.*"probePort": *\([0-9]*\).*/\1/p' "$(CONFIG_DIR)/config.json" 2>/dev/null); \
 	curl -s --max-time 1 "http://127.0.0.1:$${port:-4320}/" | grep -q '"probe":"ios-sim"' && left="$$left relay:$${port:-4320}"; \

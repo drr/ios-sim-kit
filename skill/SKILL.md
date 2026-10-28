@@ -26,6 +26,7 @@ $S boot app-iPadPro11-M4
 $S probe start                                    # relay at http://127.0.0.1:4320
 $S open app-iPadPro11-M4 "http://127.0.0.1:8080/?t=$(date +%s)" --probe ipad --only  # only tab; names the page
 $S probe wait ipad                                # until the page polls (30s)
+$S tabs app-iPadPro11-M4                          # Safari's tabs: * (active), URL, title [--json]
 $S rotate app-iPadPro11-M4 landscape-left          # or portrait | landscape-right; waits until done
 $S probe run ipad 'return { w: innerWidth, vh: visualViewport.height }' --wait-ms 600  # let Safari settle
 $S tap-el app-iPadPro11-M4 --probe ipad --selector '#search'
@@ -64,8 +65,12 @@ Look at screenshots with Read. Check measurements, not just pictures.
 
 ## Gotchas
 
-- `open` opens a new tab, unless only the `#hash` differs from an open tab: then Safari switches to that tab without
-  reloading it. Always add a unique `?t=`.
+- `open` returns once Safari shows the page's tab, and prints the tab count. It opens a new tab unless the current
+  tab is blank (Safari still starting, or after ⌘T), or only the `#hash` differs from an open tab: then Safari
+  switches to that tab without reloading it. Always add a unique `?t=`. `open … --new-tab` presses ⌘T first and
+  fails unless there's one tab more.
+- iPad Safari hides its tab strip with one tab, which changes the toolbar's travel (iPad landscape: 29px with one
+  tab, 71px with more). Test both: `open … --only` for one tab, then `open … --new-tab` for two. Check with `tabs`.
 - `tap-el` fails if the element's centre is off screen: scroll first (`swipe-page`, or `scrollTo` through the probe).
   On a miss, it prints a screenshot path. Read it before retrying.
 - Real swipes collapse Safari's floating toolbar; `scrollTo` doesn't. Two swipes up collapse it, a short swipe down
@@ -73,14 +78,14 @@ Look at screenshots with Read. Check measurements, not just pictures.
 - `window --width W` drags the window's edge until `innerWidth` is within 4px of W, and fails if it can't (iPadOS's
   minimum is 375). Below ~511, iPad Safari uses its compact chrome (iPhone-style toolbar at the bottom).
 - Simulator Safari's toolbar geometry isn't a real device's: toolbar travel (iOS 26.3 sim) is 71px on iPad
-  landscape with tabs, 61.5px in the left half, 40px on iPhone 16; real devices (26.6) show 98.5–108px. Check
+  landscape with tabs (29px with one), 61.5px in the left half, 40px on iPhone 16; real devices (26.6) show 98.5–108px. Check
   toolbar-dependent layout on hardware.
 - `rotate` names: `landscape-left` = `screen.orientation.type` `landscape-primary`; `landscape-right` = `landscape-secondary`.
 - iOS capitalizes the first letter typed into a search field; compare text case-insensitively.
 - A probe that stops answering usually means Safari now shows another tab. The error says when the page last
   polled and lists the pages polling; take a screenshot. `stop` then `boot` resets Safari's windows to full screen.
-- Every `open` adds a tab, and stale tabs pile up. Use `open … --only` (or `safari-reset DEVICE`): it quits Safari
-  and deletes its saved tabs first, so the page is the only tab.
+- Stale tabs pile up across runs. Use `open … --only` (or `safari-reset DEVICE`): it quits Safari and deletes its
+  saved tabs first, so the page is the only tab.
 - `window` stops with a screenshot path if the page isn't the visible tab before any of its taps; it never taps on
   blind. Read the screenshot, then `open --only` again.
 - Two booted devices don't interfere: rotation, taps and screenshots all go by UDID.
@@ -96,6 +101,21 @@ only; web content isn't in it), `tap --id SidebarButton`, `key-combo --modifiers
 `tap-check DEVICE` tests whether taps land where they're sent, and `gesture-check DEVICE` tests swipes and drags. Each
 opens its own page and finds the region itself; if that misses (e.g. in a tiled window), pass
 `--origin X,Y --size WxH` inside the page.
+
+## Feedback: problems and requests
+
+`feedback` files a report for ios-sim's maintainers. Use it right when you hit either kind:
+- a **problem** (`--kind bug`, the default): a command misbehaves or wrongly reports success, or these docs turned
+  out wrong. Give the steps that reproduce it, what you expected, and what happened.
+- a **request** (`--kind request`): something you needed that ios-sim can't do, or could do better. Give what you
+  were trying to do, what you did instead, and what would have helped.
+```
+printf '%s\n' "Steps: …" "Expected: …" "Actual: …" | $S feedback --title "open reuses the current tab" \
+  [--kind request] [--attach /tmp/shot.png]
+```
+It adds the version, `doctor`, the booted devices and your recent ios-sim commands with their output, and prints
+the report's path. Tell the user that path. `feedback --list` shows the open reports. A report is deleted once a
+release handles it.
 
 ## User priorities
 
