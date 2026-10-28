@@ -25,12 +25,29 @@ Things tried while building ios-sim, kept so nobody retries them.
 - **Background tabs.** They don't resize on rotation, and they kept polling under their name. Jobs went to
   whichever tab polled last: a test measured 834 wide in landscape from a hidden tab. Pages now poll only while
   visible, and calibration refuses hidden pages.
-- **Unsolved: Safari switches tabs in tiled mode.** Twice, after `window left-half` and a `tap-check` with many
-  tabs open, the page in front changed by itself to an older tab. The probe then got no answer from the page it
-  expected. `window full` from that state also failed four times; a shutdown and boot fixed both. Not reproduced
-  on demand. Mitigations so far: the probe's timeout error lists the pages polling, and `probe wait` fails clearly.
-  Next steps if it recurs: check whether openurl in tiled mode opens a second Safari window, and whether tab count
-  matters.
+- **Safari "switching tabs" in tiled mode** was ios-sim's own tap. `setWindow` aimed at the window controls' pill
+  at a fixed offset (−32pt) above the page. That holds without a tab bar, but with more than one tab a regular-width
+  window shows a 42pt tab bar, and the tap landed on it: no tab in front, the probe unanswered. Reproduced on demand
+  (2026-10-28) going from the right half to the left with five tabs. watched-media hit the same from a floating,
+  regular-width window. A first fix (pill at a fixed y for tiled windows, −38 from the page for floating ones)
+  assumed floating windows are compact, which a rotated tile needn't be. The lights are now found in a screenshot,
+  and every tap is preceded by a check that the page is still in front (`architecture.md`).
+- **The accessibility tree as the window's state.** After a rotation it went stale: `window full` reported success
+  on a 375-wide floating window (reported by watched-media). The page's own frame is now the state.
+- **Resizing a floating window.** It grows about its centre, and after one drag stopped responding to edge drags.
+  `--width` tiles the window first.
+- **The e2e test in the caller's session.** It ran under the calling Claude session's id, so its `stop` also shut
+  down an iPad the caller had booted, and its "left alone" check failed. It now sets its own `IOS_SIM_SESSION`.
+- **Two booted devices** (iPhone and iPad) didn't interfere: rotating and tapping one left the other's orientation,
+  width and clicks unchanged. No warning needed.
+- **`window.name` to carry the probe's name past an app's URL rewrites.** The plan: `open --probe` opens a hop page
+  on the relay that sets `window.name` and replaces itself with the app's URL. WebKit (iOS 26.3) clears
+  `window.name` on any cross-origin navigation, including the same host on another port
+  (`127.0.0.1:4321` → `127.0.0.1:8088` arrived as `""`). It survives only same-origin, where sessionStorage already
+  works. Dropped. A late-loading probe needs `data-probe-name`.
+- **Resizing a window from just inside its edge.** A drag starting 1pt inside the window is a long press on the
+  page (it selects text); small drags from a half tile also snapped back. Starting 3pt outside the edge resizes
+  to within ~1px.
 - **Upstream AXe in landscape** (1.8.0 on Xcode 26.3) can't read the simulator's orientation, so it scales and
   rotates every landscape tap: the iPad fitted A ≈ [0, 0.689; −0.689, 0]. That's why axe-patched is required. The
   fit test keeps that matrix as its non-identity case, and `tap-check` detects a bad map.

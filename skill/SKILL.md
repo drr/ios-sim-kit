@@ -24,14 +24,16 @@ S=@IOS_SIM@
 $S ensure app iPhone16=iPhone-16 iPadPro11-M4=iPad-Pro-11-inch-M4-8GB  # once: creates app-iPhone16, app-iPadPro11-M4
 $S boot app-iPadPro11-M4
 $S probe start                                    # relay at http://127.0.0.1:4320
-$S open app-iPadPro11-M4 "http://127.0.0.1:8080/?t=$(date +%s)#probe=ipad"
+$S open app-iPadPro11-M4 "http://127.0.0.1:8080/?t=$(date +%s)" --probe ipad --only  # only tab; names the page
 $S probe wait ipad                                # until the page polls (30s)
 $S rotate app-iPadPro11-M4 landscape-left          # or portrait | landscape-right; waits until done
-$S probe run ipad 'return { w: innerWidth, vh: visualViewport.height }'
+$S probe run ipad 'return { w: innerWidth, vh: visualViewport.height }' --wait-ms 600  # let Safari settle
 $S tap-el app-iPadPro11-M4 --probe ipad --selector '#search'
 $S swipe-page app-iPadPro11-M4 --probe ipad --from 0.75 --to 0.3
 $S screenshot app-iPadPro11-M4 /tmp/shot.png --upright
-$S window app-iPadPro11-M4 left-half --probe ipad  # iPad only; then: window … full
+$S window app-iPadPro11-M4 left-half --probe ipad  # iPad only: full | left-half | right-half
+$S window app-iPadPro11-M4 --width 498 --probe ipad  # any innerWidth from 375 (iPadOS's minimum)
+$S window app-iPadPro11-M4 full --probe ipad
 $S rotate app-iPadPro11-M4 portrait
 $S stop                                           # shut down what this session booted
 ```
@@ -40,9 +42,13 @@ Look at screenshots with Read. Check measurements, not just pictures.
 ## The probe (measuring pages)
 
 - The page must load the relay's script: `<script src="http://127.0.0.1:4320/probe.js"></script>`. The page then
-  names itself from `#probe=NAME` in its URL, or from `data-probe-name="NAME"` on the tag. The page must be served
-  over `http:`. To try things without a project page: `http://127.0.0.1:4320/demo#probe=NAME`.
-- `probe run NAME SCRIPT`: SCRIPT is an async function body; return JSON-safe values.
+  names itself from `ios-sim-probe=NAME` in its URL's hash or query (`open --probe NAME` adds it), or from
+  `data-probe-name="NAME"` on the tag. The page must be served over `http:`. To try things without a project page:
+  `open DEVICE http://127.0.0.1:4320/demo --probe NAME`.
+- The script reads the URL once, when it runs. Load it as a plain `<script>` early in `<head>`, before app code
+  rewrites the URL (`history.replaceState` drops unknown keys). Loaded later, it needs `data-probe-name`.
+- `probe run NAME SCRIPT`: SCRIPT is an async function body; return JSON-safe values. After a swipe or rotation,
+  add `--wait-ms 600` so Safari's toolbar animation settles before measuring.
 - Only the visible tab answers. A background tab doesn't resize on rotation.
 - Don't use safaridriver: Safari ignores touches while WebDriver is attached.
 - Useful values: `innerWidth`, `visualViewport.height` (Safari's toolbar changes it), `screen.orientation.type`,
@@ -64,10 +70,20 @@ Look at screenshots with Read. Check measurements, not just pictures.
   On a miss, it prints a screenshot path. Read it before retrying.
 - Real swipes collapse Safari's floating toolbar; `scrollTo` doesn't. Two swipes up collapse it, a short swipe down
   brings it back.
+- `window --width W` drags the window's edge until `innerWidth` is within 4px of W, and fails if it can't (iPadOS's
+  minimum is 375). Below ~511, iPad Safari uses its compact chrome (iPhone-style toolbar at the bottom).
+- Simulator Safari's toolbar geometry isn't a real device's: toolbar travel (iOS 26.3 sim) is 71px on iPad
+  landscape with tabs, 61.5px in the left half, 40px on iPhone 16; real devices (26.6) show 98.5–108px. Check
+  toolbar-dependent layout on hardware.
 - `rotate` names: `landscape-left` = `screen.orientation.type` `landscape-primary`; `landscape-right` = `landscape-secondary`.
 - iOS capitalizes the first letter typed into a search field; compare text case-insensitively.
-- A probe that stops answering usually means Safari now shows another tab. The error lists the pages polling;
-  take a screenshot. `stop` then `boot` resets Safari's windows to full screen.
+- A probe that stops answering usually means Safari now shows another tab. The error says when the page last
+  polled and lists the pages polling; take a screenshot. `stop` then `boot` resets Safari's windows to full screen.
+- Every `open` adds a tab, and stale tabs pile up. Use `open … --only` (or `safari-reset DEVICE`): it quits Safari
+  and deletes its saved tabs first, so the page is the only tab.
+- `window` stops with a screenshot path if the page isn't the visible tab before any of its taps; it never taps on
+  blind. Read the screenshot, then `open --only` again.
+- Two booted devices don't interfere: rotation, taps and screenshots all go by UDID.
 - Stray taps can open cards, Safari's menus or other apps. Recover with Escape (`key DEVICE 41`) or a fresh URL.
 
 ## Raw input (native UI, or when there's no probe)

@@ -1,13 +1,19 @@
 // The page side of the probe, served by the relay as /probe.js. A page opts in by loading it:
 //   <script src="http://127.0.0.1:4320/probe.js" data-probe-name="ipad"></script>
-// or by loading it always and being opened with #probe=NAME. It then asks the relay (the origin it was loaded from)
-// for scripts from a tool on this machine, runs each here, and posts back what it returns. Without a name it does
-// nothing.
+// or by loading it always and being opened with ios-sim-probe=NAME in its hash or query (`ios-sim open --probe NAME`
+// adds it). The URL is read when this runs, so load it before app code rewrites the URL. It then asks the relay (the
+// origin it was loaded from) for scripts from a tool on this machine, runs each here, and posts back what it
+// returns. Without a name it does nothing.
 (() => {
   const me = /** @type {HTMLScriptElement | null} */ (document.currentScript);
   const relay = me ? new URL(me.src).origin : "";
-  const fromHash = /(?:^#|&)probe=([\w.-]{1,40})/.exec(location.hash)?.[1];
-  const name = me?.dataset.probeName || fromHash || sessionStorage.getItem("ios-sim-probe");
+  const key = /[?#&]ios-sim-probe=([\w.-]{1,40})(?:[&#]|$)/;
+  const fromUrl = key.exec(location.search)?.[1] || key.exec(location.hash)?.[1];
+  let stored = null;
+  try {
+    stored = sessionStorage.getItem("ios-sim-probe");
+  } catch {}
+  const name = me?.dataset.probeName || fromUrl || stored;
   const w = /** @type {{ __iosSimProbe?: string }} */ (/** @type {unknown} */ (window));
   if (!relay || !name || w.__iosSimProbe) return;
   w.__iosSimProbe = name;

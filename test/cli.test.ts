@@ -14,6 +14,7 @@ test("help lists the commands", () => {
     "boot",
     "stop",
     "open",
+    "safari-reset",
     "rotate",
     "orientation",
     "screenshot",
@@ -54,4 +55,17 @@ test("bad arguments fail with a message, not a stack", () => {
   const r = spawnSync(process.execPath, [CLI, "rotate"], { encoding: "utf8" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^ios-sim: /);
+});
+
+test("window takes a mode or --width, not both or neither", () => {
+  for (const args of [
+    ["sk-iPadPro11-M4", "--probe", "p"],
+    ["sk-iPadPro11-M4", "left-half", "--width", "500", "--probe", "p"],
+    ["sk-iPadPro11-M4", "top-half", "--probe", "p"],
+    ["sk-iPadPro11-M4", "full"],
+  ]) {
+    const r = spawnSync(process.execPath, [CLI, "window", ...args], { encoding: "utf8" });
+    assert.equal(r.status, 1, args.join(" "));
+    assert.match(r.stderr, /^ios-sim: window DEVICE full\|left-half\|right-half/);
+  }
 });

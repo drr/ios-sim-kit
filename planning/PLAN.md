@@ -48,6 +48,12 @@ Open:
 - An MCP server only if the CLI proves clumsy in practice. If built, it must wrap the same CLI and module, not
   duplicate them.
 
+Done since (2026-10-28, requests from watched-media): the probe's name key is `ios-sim-probe=` (query or
+hash; `#probe=` dropped), `open --probe NAME`, `window right-half`, `window --width W`, `probe run --wait-ms`, and
+the fix for the tiled-mode tab switch (`lessons.md`). Then: window lights found in screenshots
+(`png.ts`), the page's frame as the window state, a check before every tap, `safari-reset` / `open --only`, a
+clearer "no answer" error.
+
 Ideas, not committed to:
 - `tap-el --scroll`: scroll the element into view first.
 - `ios-sim close-tabs DEVICE`: test runs pile up Safari tabs.

@@ -13,6 +13,15 @@ export type PageFn = (...args: any[]) => unknown;
 
 export const relayUrl = (port = config().probePort) => `http://127.0.0.1:${port}`;
 
+/** `url` with `ios-sim-probe=NAME` added: in the hash, or in the query when the URL has a hash of its own. */
+export function withProbeName(url: string, name: string): string {
+  if (/[?#&]ios-sim-probe=/.test(url)) return url;
+  const u = new URL(url);
+  if (u.hash) u.searchParams.set("ios-sim-probe", name);
+  else u.hash = `ios-sim-probe=${name}`;
+  return u.href;
+}
+
 /** Runs `fn` (a function, or an async function body as a string) in the page named `client`; throws if it fails. */
 export async function probe<T>(client: string, fn: PageFn | string, args: unknown[] = [], timeoutMs = 10_000) {
   const script = typeof fn === "string" ? fn : `return (${fn.toString()})(...${JSON.stringify(args)});`;
@@ -24,10 +33,15 @@ export async function probe<T>(client: string, fn: PageFn | string, args: unknow
   const body = (await res.json()) as { ok?: boolean; value?: unknown; error?: string };
   if (!body.ok && body.error?.startsWith("no answer")) {
     // Usually the page isn't the visible tab any more (Safari switched tabs, or it never loaded).
-    const polling = (await clients().catch(() => [])).filter((c) => c.ago < 3000).map((c) => c.name);
+    const all = await clients().catch(() => []);
+    const polling = all.filter((c) => c.ago < 3000).map((c) => c.name);
+    const mine = all.find((c) => c.name === client);
+    const last = mine
+      ? `'${client}' last polled ${(mine.ago / 1000).toFixed(0)}s ago`
+      : `'${client}' hasn't polled for 30s or more`;
     throw new Error(
-      `probe ${client}: ${body.error}; pages polling now: ${polling.join(", ") || "none"}. ` +
-        "Only the visible tab polls: take a screenshot to see which page is in front.",
+      `probe ${client}: ${body.error}; ${last}; pages polling now: ${polling.join(", ") || "none"}. ` +
+        "Only the visible tab polls: run `ios-sim screenshot DEVICE FILE --upright` to see which page is in front.",
     );
   }
   if (!body.ok) throw new Error(`probe ${client}: ${body.error ?? `HTTP ${res.status}`}`);

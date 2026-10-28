@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
+import { withProbeName } from "../src/probe-client.ts";
 import { ProbeHub } from "../src/probe-hub.ts";
 import { listen, relay } from "../src/probe-relay.ts";
 
@@ -89,7 +92,8 @@ test("relay: a page polls and answers across origins; only a tool without an Ori
     const js = await call(port, "/probe.js", { headers: PAGE });
     assert.equal(js.status, 200);
     assert.equal(js.headers["access-control-allow-origin"], "*");
-    assert.match(js.body, /probeName|data-probe-name|probe=/);
+    assert.match(js.body, /data-probe-name/);
+    assert.match(js.body, /ios-sim-probe=/);
     assert.equal((await call(port, "/demo")).status, 200);
     assert.equal((await call(port, "/next?client=bad%20name")).status, 400);
     assert.equal((await call(port, "/nope")).status, 404);
@@ -147,4 +151,46 @@ test("relay: a page polls and answers across origins; only a tool without an Ori
     }
     assert.equal((await call(port, "/run", { method: "POST", headers: JSON_TYPE, body: "{" })).status, 400);
   });
+});
+
+/** Runs probe-page.js in a sandbox shaped like a page; returns the name it took (undefined: it stayed off). */
+function pageName(opts: { tag?: string; search?: string; hash?: string; stored?: string }) {
+  const store = new Map(opts.stored ? [["ios-sim-probe", opts.stored]] : []);
+  const win: Record<string, unknown> = {
+    document: {
+      currentScript: { src: "http://127.0.0.1:4320/probe.js", dataset: { probeName: opts.tag } },
+      visibilityState: "hidden",
+    },
+    location: { search: opts.search ?? "", hash: opts.hash ?? "" },
+    sessionStorage: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+    },
+    addEventListener: () => {},
+    fetch: () => new Promise(() => {}),
+    setTimeout,
+    URL,
+    AbortController,
+  };
+  win.window = win;
+  runInNewContext(readFileSync(new URL("../src/probe-page.js", import.meta.url), "utf8"), win);
+  return win.__iosSimProbe as string | undefined;
+}
+
+test("probe page: its name comes from the tag, then ios-sim-probe= in the URL, then the tab's storage", () => {
+  assert.equal(pageName({ tag: "t", hash: "#ios-sim-probe=h", stored: "s" }), "t");
+  assert.equal(pageName({ hash: "#ios-sim-probe=h", stored: "s" }), "h");
+  assert.equal(pageName({ hash: "#/route&ios-sim-probe=h2" }), "h2");
+  assert.equal(pageName({ search: "?a=1&ios-sim-probe=q" }), "q");
+  assert.equal(pageName({ stored: "s" }), "s");
+  // The page's own #probe= belongs to the page (watched-media has one), and a longer key isn't ours.
+  assert.equal(pageName({ hash: "#probe=theirs" }), undefined);
+  assert.equal(pageName({ hash: "#my-ios-sim-probe=x" }), undefined);
+  assert.equal(pageName({ hash: "#ios-sim-probe=bad name" }), undefined);
+});
+
+test("withProbeName: in the hash, or the query when the URL has a hash of its own", () => {
+  assert.equal(withProbeName("http://h:8080/?t=1", "ipad"), "http://h:8080/?t=1#ios-sim-probe=ipad");
+  assert.equal(withProbeName("http://h/#/list", "ipad"), "http://h/?ios-sim-probe=ipad#/list");
+  assert.equal(withProbeName("http://h/#ios-sim-probe=x", "ipad"), "http://h/#ios-sim-probe=x");
 });

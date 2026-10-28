@@ -5,8 +5,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 import { config, HOME } from "./config.ts";
-import { setWindow, swipePage, tapEl } from "./page.ts";
-import { clients, ensureRelay, probe, relayUrl, stopRelay, waitForClient } from "./probe-client.ts";
+import { setWindow, setWindowWidth, swipePage, tapEl, WINDOW_MODES, type WindowMode } from "./page.ts";
+import { clients, ensureRelay, probe, relayUrl, stopRelay, waitForClient, withProbeName } from "./probe-client.ts";
+import { probeName } from "./probe-hub.ts";
 import { listen, relay } from "./probe-relay.ts";
 import {
   axe,
@@ -19,8 +20,10 @@ import {
   orientation,
   resolve,
   rotate,
+  safariReset,
   screenshot,
   sh,
+  sleep,
   stop,
 } from "./sim.ts";
 
@@ -81,7 +84,9 @@ const USAGE = `usage: ios-sim <command>   (DEVICE = a simulator's name or UDID)
   boot DEVICE                  boot, wait until ready, show Simulator behind other apps
   stop [DEVICE...]             shut down what this session booted (or the named devices); with nothing left
                                booted, also quit Simulator and the probe relay. Keeps calibrations and screenshots
-  open DEVICE URL              open a URL in the device's Safari
+  open DEVICE URL              open a URL in the device's Safari [--probe NAME: add ios-sim-probe=NAME to it]
+                               [--only: safari-reset first, so it's the only tab]
+  safari-reset DEVICE          quit Safari and delete its saved tabs
   rotate DEVICE ORIENTATION    portrait | landscape-left | landscape-right | portrait-upside-down; waits until done
   orientation DEVICE           print the device's orientation
   screenshot DEVICE FILE       save a PNG [--upright: turn it the way the device is held]
@@ -97,9 +102,11 @@ const USAGE = `usage: ios-sim <command>   (DEVICE = a simulator's name or UDID)
   probe clients                pages polling the relay
   probe wait CLIENT            wait until a page named CLIENT polls [--timeout 30000]
   probe run CLIENT SCRIPT      run an async function body in a page; prints its JSON result [--timeout MS]
+                               [--wait-ms N: wait first, e.g. for Safari's animations to settle]
   tap-el DEVICE --probe CLIENT --selector CSS     tap an element's centre and check the page saw it there
   swipe-page DEVICE --probe CLIENT [--from 0.75 --to 0.3]   swipe by fractions of the visible height
-  window DEVICE full|left-half --probe CLIENT     iPad: Safari full screen or in the left half
+  window DEVICE full|left-half|right-half --probe CLIENT    iPad: Safari full screen, or in a half
+  window DEVICE --width W --probe CLIENT          iPad: resize Safari's window until innerWidth is W [--tolerance 4]
   tap-check DEVICE [--origin X,Y --size WxH] [--grid CxR]   tap a grid on a test page; PASS if taps land where sent
   gesture-check DEVICE [--origin X,Y --size WxH]            swipe and drag; PASS if the page saw the deltas sent
   tap-serve [--port 4319]      the tap recorder page alone (state at /state)
@@ -148,9 +155,18 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "open": {
+      const { values, positionals } = opts({ probe: { type: "string" }, only: { type: "boolean" } });
+      const dev = await resolve(positionals[0]);
+      if (!positionals[1]) throw new Error("open DEVICE URL [--probe NAME] [--only]");
+      if (values.only) await safariReset(dev);
+      const url = values.probe ? withProbeName(positionals[1], probeName(values.probe)) : positionals[1];
+      await openUrl(dev, url);
+      return 0;
+    }
+    case "safari-reset": {
       const dev = await resolve(rest[0]);
-      if (!rest[1]) throw new Error("open DEVICE URL");
-      await openUrl(dev, rest[1]);
+      const gone = await safariReset(dev);
+      console.log(`${dev.name}: quit Safari${gone.length ? `, removed ${gone.join(", ")}` : "; it had no saved tabs"}`);
       return 0;
     }
     case "rotate": {
@@ -251,15 +267,30 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "window": {
-      const { values, positionals } = opts({ probe: { type: "string" } });
+      const { values, positionals } = opts({
+        probe: { type: "string" },
+        width: { type: "string" },
+        tolerance: { type: "string", default: "4" },
+      });
       const mode = positionals[1];
-      if (!values.probe || (mode !== "full" && mode !== "left-half"))
-        throw new Error("window DEVICE full|left-half --probe CLIENT");
+      const usage = `window DEVICE ${WINDOW_MODES.join("|")} --probe CLIENT, or window DEVICE --width W --probe CLIENT`;
+      const byMode = (WINDOW_MODES as readonly string[]).includes(mode ?? "");
+      if (!values.probe || byMode === (values.width !== undefined)) throw new Error(usage);
       const dev = await resolve(positionals[0]);
+      const ctx = { dev, client: values.probe as string };
+      if (byMode) {
+        await ensureRelay();
+        const w = await setWindow(ctx, mode as WindowMode);
+        console.log(`${dev.name} ${mode}: innerWidth ${w}`);
+        return 0;
+      }
+      const [width, tolerance] = nums([values.width, values.tolerance] as string[], 2, "--width and --tolerance");
       await ensureRelay();
-      const w = await setWindow({ dev, client: values.probe as string }, mode);
-      console.log(`${dev.name} ${mode}: innerWidth ${w}`);
-      return 0;
+      const w = await setWindowWidth(ctx, width as number, tolerance);
+      const ok = Math.abs(w - (width as number)) <= (tolerance as number);
+      console.log(`${dev.name}: innerWidth ${w} (asked ${width})`);
+      if (!ok) console.error(`ios-sim: couldn't get within ${tolerance}px of ${width}; iPadOS may not allow it`);
+      return ok ? 0 : 1;
     }
     case "tap-check":
       return tapRecorder("check", rest);
@@ -287,7 +318,11 @@ async function probeCommand(args: string[]): Promise<number> {
   const [sub, ...rest] = args;
   const { values, positionals } = parseArgs({
     args: rest,
-    options: { port: { type: "string" }, timeout: { type: "string", default: "10000" } },
+    options: {
+      port: { type: "string" },
+      timeout: { type: "string", default: "10000" },
+      "wait-ms": { type: "string", default: "0" },
+    },
     allowPositionals: true,
   });
   const port = values.port ? Number(values.port) : config().probePort;
@@ -318,8 +353,10 @@ async function probeCommand(args: string[]): Promise<number> {
       return 0;
     case "run": {
       const [client, script] = positionals;
-      if (!client || script === undefined) throw new Error("probe run CLIENT SCRIPT");
+      if (!client || script === undefined) throw new Error("probe run CLIENT SCRIPT [--wait-ms N]");
+      const [waitMs] = nums([values["wait-ms"] as string], 1, "--wait-ms");
       await ensureRelay(port);
+      await sleep(waitMs as number); // e.g. until Safari's toolbar animation after a swipe or rotation settles
       console.log(JSON.stringify(await probe(client, script, [], Number(values.timeout))));
       return 0;
     }

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { HOME } from "./config.ts";
 import { type Affine, fitAffine, invert, type Pt } from "./fit.ts";
+import { findLights, type Lights, readPng } from "./png.ts";
 import { probe } from "./probe-client.ts";
 import { axe, type Device, isLandscape, orientation, screenshot, sleep } from "./sim.ts";
 
@@ -220,7 +221,8 @@ export async function swipePage(ctx: Ctx, from: number, to: number, duration = 0
   await sleep(1200);
 }
 
-export type WindowMode = "full" | "left-half";
+export const WINDOW_MODES = ["full", "left-half", "right-half"] as const;
+export type WindowMode = (typeof WINDOW_MODES)[number];
 
 interface Frame {
   x: number;
@@ -261,52 +263,81 @@ export async function safariWindow(dev: Device): Promise<SafariWindow | null> {
   return { screen: root.frame, window, sidebar };
 }
 
-/**
- * The window as the page sees it, for when the accessibility tree doesn't show Safari (it reports another app while
- * Safari is tiled or floating): the page's top-left on screen and its size. The sidebar is taken as closed.
- */
-async function fromPage(ctx: Ctx): Promise<SafariWindow> {
+/** Where the page is on screen, in the current orientation, from a fresh calibration. */
+async function pageFrame(ctx: Ctx) {
   forgetCalibration(ctx);
   const k = await calibration(ctx);
   const o = toScreen(k, { x: 0, y: 0 });
-  return {
-    screen: { x: 0, y: 0, width: k.screen.w, height: k.screen.h },
-    window: { x: o.x, y: 0, width: k.key.w, height: k.screen.h },
-    sidebar: false,
-  };
+  return { k, x: o.x, y: o.y, w: k.key.w, h: k.key.h, screen: k.screen };
+}
+type PageFrame = Awaited<ReturnType<typeof pageFrame>>;
+
+/** Each mode's test on the page's frame, and the menu item that sets it, as an offset from the open green light. */
+const MODES: Record<WindowMode, { is: (f: PageFrame) => boolean; item: Pt }> = {
+  // The page spans the screen (a top half would too, so also its height).
+  full: { is: (f) => f.w >= f.screen.w - 2 && f.y + f.h >= f.screen.h - 30, item: { x: -64, y: 162 } },
+  "left-half": { is: (f) => f.x < 20 && isHalf(f), item: { x: -64, y: 83 } }, // Move & Resize, 1st
+  "right-half": { is: (f) => f.x + f.w > f.screen.w - 20 && isHalf(f), item: { x: -11, y: 83 } }, // 2nd
+};
+const isHalf = (f: PageFrame) => f.w > f.screen.w * 0.45 && f.w < f.screen.w * 0.55;
+
+/** Stops a window move at once, rather than tapping on, unless the page still answers from the visible tab. */
+async function stillThere(ctx: Ctx, step: string): Promise<void> {
+  const state = await probe<string>(ctx.client, "return document.visibilityState", [], 3000).catch(() => "gone");
+  if (state !== "visible")
+    throw new Error(
+      `${ctx.dev.name}: the page ${ctx.client} isn't in front any more (${step}); stopped. ` +
+        `Screenshot: ${await failShot(ctx, "window")}`,
+    );
 }
 
-const isFull = (s: SafariWindow) => s.window.width >= s.screen.width - 2 && s.window.height >= s.screen.height - 2;
-const isLeftHalf = (s: SafariWindow) =>
-  s.window.x < 20 && s.window.width > s.screen.width * 0.4 && s.window.width < s.screen.width * 0.6;
+/**
+ * The window lights near the page's top left, from a screenshot: the closed pill (gap ~10pt) or the open buttons
+ * (gap ~35pt). Null when there are none there, as in full screen. Found by colour, not by offsets from the page,
+ * because Safari's toolbar above the page varies: with more than one tab, a regular-width window shows a 42pt tab
+ * bar, and a tap aimed past it switches tabs.
+ */
+async function lights(ctx: Ctx, f: PageFrame): Promise<Lights | null> {
+  mkdirSync(join(HOME, "shots"), { recursive: true });
+  const file = join(HOME, "shots", `${ctx.dev.udid}-lights.png`);
+  await screenshot(ctx.dev, file, true);
+  const img = readPng(file);
+  return findLights(img, img.width / f.screen.w, { x: f.x - 10, y: f.y - 140, w: 200, h: 140 });
+}
 
 /**
- * Puts Safari full screen or in the left half (iPadOS 26), with its sidebar closed so the page gets the window's
- * width. The window's frame and the sidebar come from the accessibility tree. From full screen, dragging the window's
- * corner grip makes it a floating window; a floating or tiled window has controls at its top left (a pill that opens
- * into three buttons), and a long press on the green one opens a menu: Move & Resize (left half first) and Fill &
- * Arrange (fill first). The controls and the menu aren't in the accessibility tree, so those taps go by offsets from
- * the page's top-left, measured on iPadOS 26.3. Returns the final innerWidth.
+ * Puts Safari full screen or in a half (iPadOS 26), with its sidebar closed so the page gets the window's width. The
+ * page's own frame decides the state (the accessibility tree is stale after a rotation and shows another app outside
+ * full screen; it's used only for the sidebar). From full screen, dragging the window's corner grip makes a floating
+ * window. A floating or tiled window has lights at its top left: a tap opens them into three buttons, and a long press
+ * on the green one opens a menu: Move & Resize (left half, right half, …) and Fill & Arrange (fill first). The lights
+ * are found in screenshots; the menu items are offsets from green, measured on iPadOS 26.3. Before each tap, the page
+ * must still be the visible tab, or it stops. Returns the final innerWidth.
  */
 export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
   const { dev, client } = ctx;
-  const half = mode === "left-half";
-  let last: SafariWindow | null = null;
+  const want = MODES[mode];
+  let f: PageFrame | null = null;
   for (let attempt = 0; attempt < 4; attempt++) {
-    const now = (await safariWindow(dev)) ?? (await fromPage(ctx));
-    last = now;
-    if (now.sidebar) {
+    await stillThere(ctx, "checking the window");
+    if ((await safariWindow(dev))?.sidebar) {
       await axe(dev, "tap", "--id", "SidebarButton");
       await sleep(1000);
       continue;
     }
-    if (half ? isLeftHalf(now) : isFull(now)) {
+    f = await pageFrame(ctx);
+    let found = await lights(ctx, f);
+    if (want.is(f) && (mode !== "full" || !found)) {
       forgetCalibration(ctx);
       return probe<number>(client, "return innerWidth");
     }
-    if (isFull(now)) {
+    if (!found) {
+      if (!MODES.full.is(f))
+        throw new Error(
+          `${dev.name}: can't find Safari's window controls; screenshot: ${await failShot(ctx, "window")}`,
+        );
       // Full screen has no window controls: shrink it to a floating window first.
-      const { width: w, height: h } = now.screen;
+      const { w, h } = f.screen;
       await axe(
         dev,
         "drag",
@@ -318,24 +349,63 @@ export async function setWindow(ctx: Ctx, mode: WindowMode): Promise<number> {
         "--pre-delay=0.3",
       );
       await sleep(1500);
+      await stillThere(ctx, "after leaving full screen");
+      f = await pageFrame(ctx);
+      found = await lights(ctx, f);
+      if (!found)
+        throw new Error(
+          `${dev.name}: no window controls after leaving full screen; screenshot: ${await failShot(ctx, "window")}`,
+        );
     }
-    forgetCalibration(ctx);
-    const k = await calibration(ctx);
-    const origin = toScreen(k, { x: 0, y: 0 });
-    const pill = { x: origin.x + 41, y: origin.y - 32 };
-    const green = { x: pill.x + 63, y: pill.y };
-    const target = { x: green.x - 64, y: green.y + (half ? 83 : 162) };
-    await tapAt(dev, pill);
-    await sleep(800);
+    if (found.gap < 20) {
+      await tapAt(dev, { x: Math.round(found.yellow.x), y: Math.round(found.yellow.y) });
+      await sleep(800);
+      await stillThere(ctx, "after opening the window controls");
+      found = await lights(ctx, f);
+      if (!found || found.gap < 20)
+        throw new Error(`${dev.name}: the window controls didn't open; screenshot: ${await failShot(ctx, "window")}`);
+    }
+    const green = { x: Math.round(found.green.x), y: Math.round(found.green.y) };
     await axe(dev, "touch", `-x=${green.x}`, `-y=${green.y}`, "--down", "--up", "--delay=1.0");
     await sleep(900);
-    await tapAt(dev, target);
+    await tapAt(dev, { x: green.x + want.item.x, y: green.y + want.item.y });
     await sleep(2000);
   }
   forgetCalibration(ctx);
-  const at = last ? JSON.stringify(last.window) : "unknown";
+  const at = f ? `page at ${f.x},${f.y}, ${f.w}x${f.h}` : "unknown";
   throw new Error(
-    `${dev.name}: could not put Safari ${half ? "in the left half" : "full screen"} (window ${at}); ` +
+    `${dev.name}: could not put Safari ${mode === "full" ? "full screen" : `in the ${mode}`} (${at}); ` +
       `screenshot: ${await failShot(ctx, "window")}`,
   );
+}
+
+/**
+ * Resizes Safari's window until the page's innerWidth is `width` (±`tolerance`), by dragging the window's side edge:
+ * the right one, or the left one when the window is against the screen's right edge. From full screen or a floating
+ * window it first goes to the left half. Returns the last innerWidth, which the caller checks: iPadOS has a minimum window width.
+ */
+export async function setWindowWidth(ctx: Ctx, width: number, tolerance = 4): Promise<number> {
+  const { dev, client } = ctx;
+  await stillThere(ctx, "checking the window");
+  const start = await pageFrame(ctx);
+  // Only a tiled window resizes predictably (a floating one grows about its centre, and soon stops responding).
+  const tiled = start.x < 20 || start.x + start.w > start.screen.w - 20;
+  if (!tiled || MODES.full.is(start) || (await safariWindow(dev))?.sidebar) await setWindow(ctx, "left-half");
+  let w = await probe<number>(client, "return innerWidth");
+  for (let attempt = 0; attempt < 6 && Math.abs(w - width) > tolerance; attempt++) {
+    await stillThere(ctx, "resizing");
+    const f = await pageFrame(ctx);
+    const right = f.x + f.w < f.screen.w - 20;
+    // The edge's grab zone is just outside the window; just inside, the drag is a long press on the page.
+    const x = right ? f.x + f.w + 3 : f.x - 3;
+    const y = Math.round(f.y + f.k.key.vvH / 2);
+    const dx = right ? width - w : w - width;
+    await axe(dev, "drag", `--start-x=${x}`, `--start-y=${y}`, `--end-x=${x + dx}`, `--end-y=${y}`, "--duration=1.2");
+    await sleep(1500);
+    const next = await probe<number>(client, "return innerWidth");
+    if (next === w) break; // at a limit
+    w = next;
+  }
+  forgetCalibration(ctx);
+  return w;
 }

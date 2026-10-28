@@ -13,8 +13,10 @@ const BIN = new URL("../bin/ios-sim", import.meta.url).pathname;
 const DEV = "sk-iPadPro11-M4";
 const CLIENT = `e2e-${Date.now().toString(36)}`;
 
+// Its own session, so its `stop` leaves alone a device the calling session booted.
+const env = { ...process.env, IOS_SIM_SESSION: CLIENT };
 const sim = (...args: string[]) =>
-  execFileSync(BIN, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  execFileSync(BIN, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env }).trim();
 const run = <T>(script: string): T => JSON.parse(sim("probe", "run", CLIENT, script)) as T;
 const front = () =>
   execFileSync(
@@ -30,7 +32,7 @@ function pngSize(file: string) {
   return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
 }
 
-test("iPad: boot, probe, rotate, tap, swipe, screenshot, tile and back", {
+test("iPad: boot, probe, rotate, tap, swipe, screenshot, tile, resize and back", {
   skip: !process.env.IOS_SIM_E2E,
 }, async () => {
   const app = front();
@@ -39,7 +41,10 @@ test("iPad: boot, probe, rotate, tap, swipe, screenshot, tile and back", {
   const relay = sim("probe", "start");
   sim("rotate", DEV, "portrait");
   // A new tab: openurl switches to an open tab whose URL differs only in the hash, without reloading it.
-  sim("open", DEV, `${relay}/demo?t=${Date.now()}#probe=${CLIENT}`);
+  // A few stale tabs, so Safari shows its tab bar; then ours.
+  sim("open", DEV, `${relay}/demo?t=${Date.now()}a`, "--only");
+  sim("open", DEV, `${relay}/demo?t=${Date.now()}b`);
+  sim("open", DEV, `${relay}/demo?t=${Date.now()}`, "--probe", CLIENT);
   sim("probe", "wait", CLIENT);
   sim("window", DEV, "full", "--probe", CLIENT);
   assert.equal(run<number>("return innerWidth"), 834);
@@ -62,7 +67,23 @@ test("iPad: boot, probe, rotate, tap, swipe, screenshot, tile and back", {
 
   assert.match(sim("window", DEV, "left-half", "--probe", CLIENT), /innerWidth (\d+)/);
   const half = run<number>("return innerWidth");
-  assert.ok(half > 1210 * 0.4 && half < 1210 * 0.6, `left half is ${half} wide`);
+  assert.ok(half > 1210 * 0.45 && half < 1210 * 0.55, `left half is ${half} wide`);
+  // Below ~511, iPad Safari switches to its compact (iPhone-style) chrome.
+  assert.match(sim("window", DEV, "--width", "498", "--probe", CLIENT), /innerWidth (\d+)/);
+  assert.ok(Math.abs(run<number>("return innerWidth") - 498) <= 4);
+  run("scrollTo(0, 0); return true");
+  sim("tap-el", DEV, "--probe", CLIENT, "--selector", "#a");
+  assert.equal(run<string[]>("return window.clicks").at(-1), "a");
+  sim("window", DEV, "right-half", "--probe", CLIENT);
+  assert.equal(run<number>("return innerWidth"), half);
+  // A rotated tile, and a floating window (the corner drag), back to full screen; the page stays in front.
+  sim("rotate", DEV, "portrait");
+  sim("window", DEV, "full", "--probe", CLIENT);
+  assert.equal(run<number>("return innerWidth"), 834);
+  sim("rotate", DEV, "landscape-left");
+  sim("drag", DEV, "1204", "828", "726", "667");
+  await sleep(1500);
+  assert.ok(run<number>("return innerWidth") < 1210, "the corner drag made a floating window");
   sim("window", DEV, "full", "--probe", CLIENT);
   assert.equal(run<number>("return innerWidth"), 1210);
 

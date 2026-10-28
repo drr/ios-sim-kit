@@ -35,8 +35,10 @@ check: it shuts down the devices the session booted, and quits Simulator and the
 
 To measure a page, the page loads the probe script from the relay that `ios-sim probe start` runs:
 ```html
-<script src="http://127.0.0.1:4320/probe.js"></script>   <!-- named by #probe=NAME in the page's URL -->
+<script src="http://127.0.0.1:4320/probe.js"></script>   <!-- early in <head>; named by ios-sim-probe=NAME -->
 ```
+`ios-sim open DEVICE URL --probe NAME` adds `#ios-sim-probe=NAME` to the URL. The script reads the URL when it runs,
+so load it before app code rewrites the URL.
 Scripts can also drive it from node: `import { probe } from "~/.local/share/ios-sim-kit/src/probe-client.ts"`.
 
 ## Develop

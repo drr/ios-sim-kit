@@ -1,6 +1,7 @@
 // Simulators: find, create, boot, rotate, and drive them with AXe. Nothing here takes the user's keyboard focus.
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { config, HOME } from "./config.ts";
@@ -194,6 +195,29 @@ export async function stop(targets?: Device[]): Promise<StopResult> {
 }
 
 export const openUrl = (dev: Device, url: string) => sh("xcrun", ["simctl", "openurl", dev.udid, url]);
+
+/**
+ * Quits Safari and deletes its saved tabs (SafariTabs.db in the device's data), so the next `openUrl` is the only
+ * tab. Returns the files removed. Stale tabs pile up across runs (each `open` adds one), and a stray tap brings one
+ * forward.
+ */
+export async function safariReset(dev: Device): Promise<string[]> {
+  await sh("xcrun", ["simctl", "terminate", dev.udid, "com.apple.mobilesafari"]).catch(() => {}); // not running
+  const dir = join(
+    homedir(),
+    "Library",
+    "Developer",
+    "CoreSimulator",
+    "Devices",
+    dev.udid,
+    "data",
+    "Library",
+    "Safari",
+  );
+  const gone = existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith("SafariTabs.db")) : [];
+  for (const f of gone) rmSync(join(dir, f));
+  return gone;
+}
 
 /** Runs the configured AXe against the device. */
 export const axe = (dev: Device, ...args: (string | number)[]) => sh(config().axe, [...args, "--udid", dev.udid]);
