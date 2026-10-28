@@ -1,0 +1,6 @@
+/dev/
+/.claude/skills/ios-sim-dev/
+/build/
+node_modules/
+.DS_Store
+/.claude/settings.local.json

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Bash(make *)",
+      "Bash(./bin/ios-sim *)",
+      "Bash(xcrun simctl list *)",
+      "Bash(xcrun simctl create sk-*)",
+      "Bash(xcrun simctl boot *)",
+      "Bash(xcrun simctl bootstatus *)",
+      "Bash(xcrun simctl shutdown *)",
+      "Bash(xcrun simctl openurl *)",
+      "Bash(xcrun simctl io *)",
+      "Bash(xcode-select -p)",
+      "Bash(open -g /Applications/Xcode.app/Contents/Developer/Applications/Simulator.app)",
+      "Bash(log show *)",
+      "Bash(sips *)",
+      "Bash(pgrep *)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Bash(git ls-files *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(mkdir -p *)",
+      "Bash(chmod +x *)",
+      "Read(~/.local/share/ios-sim-kit/**)",
+      "Read(~/.claude/skills/ios-sim/**)",
+      "Read(~/.config/ios-sim-kit/**)",
+      "Read(//private/tmp/claude-501/**)"
+    ],
+    "ask": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(xcrun simctl delete *)",
+      "Bash(xcrun simctl erase *)",
+      "Bash(brew *)"
+    ]
+  }
+}

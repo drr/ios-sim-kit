@@ -1,0 +1,5 @@
+#!/bin/bash
+# Dev copy: runs this repo's src/ with config in the repo's dev/, so experiments don't touch the installed ios-sim.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export IOS_SIM_HOME="${IOS_SIM_HOME:-$here/dev}"
+exec "$HOME/.nvm/versions/node/v$(cat "$here/.nvmrc")/bin/node" "$here/src/cli.ts" "$@"
