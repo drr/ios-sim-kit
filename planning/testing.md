@@ -35,8 +35,21 @@
 ## Devices
 
 `./bin/ios-sim ensure sk iPhone16=iPhone-16 iPadPro11-M4=iPad-Pro-11-inch-M4-8GB`. Leave them portrait and full
-screen. Safari tabs pile up across runs, and that may be related to the tab switching in `lessons.md`. A
-shutdown (`ios-sim stop`) resets Safari's windows to full screen.
+screen. Safari tabs pile up across runs; `open --only` (or `safari-reset`) starts with one. A shutdown
+(`ios-sim stop`) resets Safari's windows to full screen.
+
+## Device isolation
+
+Every device command goes by UDID: `resolve` turns a name into exactly one device (it refuses a name two
+simulators share, and devices outside the prefix), and `rotate` sends `axe rotate --udid` and confirms it from that
+device's backboardd. Nothing acts on the window in front. Checked by hand (2026-10-28), each step reading both
+devices' `orientation` and their pages (`innerWidth`, `screen.orientation.type`, clicks):
+
+- Same model: `sk-iPadPro11-M4` and a temporary second iPad Pro 11" (`ensure sk iPadPro11-M4b=…`, deleted after),
+  both booted. Rotating A to landscape-left, B to landscape-right, A to portrait-upside-down, and `tap-el` on each,
+  changed only the device named. Renaming B to A's name made `rotate` refuse ("2 simulators are named …; use its
+  UDID"), with neither device moving.
+- Different models: `sk-iPhone16` and `sk-iPadPro11-M4`, rotate and `tap-el` on each: likewise.
 
 ## Last verified (2026-10-28)
 
@@ -51,5 +64,5 @@ session mix-up in `lessons.md`). By hand on the iPad,
 landscape and portrait: left/right half and full from each other with five tabs open, `--width` 498/520/800/511/400
 (within 1px), 300 (stops at 375, exit 1), and `tap-el` on a 499-wide window. With four tabs: full → floating →
 `--width 640` → full → floating → full → left → portrait → full → landscape → right → portrait → left → full, all
-correct; `window` with another tab in front stops in ~4s with a screenshot. `safari-reset` leaves one tab. iPhone
-16 and iPad booted together don't interfere.
+correct; `window` with another tab in front stops in ~4s with a screenshot. `safari-reset` leaves one tab. Device
+isolation: see above.
