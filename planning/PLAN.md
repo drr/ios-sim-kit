@@ -26,8 +26,9 @@ runs), `lessons.md` (what didn't work, and why).
 - State (calibration cache, failure screenshots) goes under `IOS_SIM_HOME`, never in a hard-coded path.
 - Devices: this repo uses only its own `sk-*` simulators. Other prefixes belong to other projects. Never erase or
   delete them.
-- Runtime: node 24.21.0 pinned (`.nvmrc`, `engines`), with type stripping. No runtime dependencies. Dev deps are
-  exact-pinned and installed with the pinned node first on PATH.
+- Runtime: node 26.13.0 pinned (`.nvmrc`, `engines`), with type stripping; `check-node` refuses pins below the
+  October 2026 security fixes. No runtime dependencies. Dev deps are exact-pinned and installed with the pinned
+  node first on PATH, with install scripts off (`.npmrc`).
 - Do things the way the AXe fork (`github.com/drr/AXe`) does unless there's a reason not to; its tap recorder is
   vendored as is. Deliberate differences: `rotate` waits for backboardd and the page rather than a fixed 1.5s,
   `boot` waits on `bootstatus` rather than sleeping, and `uninstall` checks before deleting because ios-sim leaves

@@ -36,7 +36,14 @@ help:
 	@echo "make dev-skill   write the ios-sim-dev skill into this repo's .claude/skills (points at ./bin/ios-sim)"
 	@echo "make status      installed version vs this repo"
 
+# The pin must be at or above the first release of its line with the October 2026 security fixes (Node2Shell
+# CVE-2026-111497, the eMudhra CA distrust); lines below 22 and odd lines are EOL. Lines after 26 postdate the fixes.
 check-node:
+	@case "$(NODE_VERSION)" in 22.*) f=22.23.4;; 24.*) f=24.22.1;; 26.*) f=26.12.1;; *) f=;; esac; \
+	m="$(NODE_VERSION)"; m=$${m%%.*}; \
+	if [ -z "$$f" ] && [ "$$m" -le 26 ]; then echo "node $(NODE_VERSION): EOL line, pin a supported LTS"; exit 1; fi; \
+	if [ -n "$$f" ] && [ "$$(printf '%s\n' "$$f" "$(NODE_VERSION)" | sort -V | head -1)" != "$$f" ]; then \
+		echo "node $(NODE_VERSION) predates the October 2026 security fixes; pin $$f or later"; exit 1; fi
 	@test -x "$(NODE)" || { echo "missing node $(NODE_VERSION): nvm install $(NODE_VERSION)"; exit 1; }
 	@v=$$("$(NODE)" --version); test "$$v" = "v$(NODE_VERSION)" || { echo "expected v$(NODE_VERSION), got $$v"; exit 1; }
 

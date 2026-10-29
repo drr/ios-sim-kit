@@ -11,7 +11,7 @@ them, page measurements, and upright screenshots. No command takes the Mac's key
 - **`~/bin/axe-patched`**: [AXe](https://github.com/cameroncooke/AXe) built from the fork
   `github.com/drr/AXe`, branch `drr/landscape-orientation`, with `make -f drr.mk install-patched`. It adds
   `axe rotate` and maps taps correctly in landscape. Upstream AXe has neither, and ios-sim won't work without them.
-- node 24.21.0 through nvm (`.nvmrc`).
+- node 26.13.0 through nvm (`.nvmrc`).
 
 `ios-sim doctor` checks all of these.
 
