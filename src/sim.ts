@@ -201,13 +201,25 @@ const SAFARI = "com.apple.mobilesafari";
 export const safariDir = (dev: Device) =>
   join(homedir(), "Library", "Developer", "CoreSimulator", "Devices", dev.udid, "data", "Library", "Safari");
 
+/** Keeps SafariTabs.db open from boot, alongside Safari (a launchd job in the device; relaunched on demand). */
+const BOOKMARKS_SYNC = "com.apple.SafariBookmarksSyncAgent";
+
 /**
  * Quits Safari and deletes its saved tabs (SafariTabs.db in the device's data), so the next `openUrl` is the only
  * tab. Returns the files removed. Stale tabs pile up across runs (each `open` adds one), and a stray tap brings one
- * forward.
+ * forward. The bookmarks sync agent is stopped first: left running, it keeps the deleted db open while Safari makes a
+ * new one, and the db later lost all of Safari's tabs while they were still on screen.
  */
 export async function safariReset(dev: Device): Promise<string[]> {
   await sh("xcrun", ["simctl", "terminate", dev.udid, SAFARI]).catch(() => {}); // not running
+  await sh("xcrun", ["simctl", "spawn", dev.udid, "launchctl", "stop", BOOKMARKS_SYNC]).catch(() => {});
+  // `launchctl list` shows "PID\tSTATUS\tLABEL"; the PID is "-" once the job has exited.
+  for (const end = Date.now() + 3000; Date.now() < end; await sleep(100)) {
+    const row = (await sh("xcrun", ["simctl", "spawn", dev.udid, "launchctl", "list"]).catch(() => ""))
+      .split("\n")
+      .find((l) => l.endsWith(`\t${BOOKMARKS_SYNC}`));
+    if (!row || row.startsWith("-\t")) break;
+  }
   const dir = safariDir(dev);
   const gone = existsSync(dir) ? readdirSync(dir).filter((f) => f.startsWith("SafariTabs.db")) : [];
   for (const f of gone) rmSync(join(dir, f));

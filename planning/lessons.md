@@ -28,6 +28,12 @@ Things tried while building ios-sim, kept so nobody retries them.
 - **`simctl openurl` and hashes.** If the URL differs from an open tab's only in its hash, Safari switches to that
   tab and changes the hash without reloading. The page keeps its old probe name, and the new name never connects.
   Use a unique `?t=`.
+- **Deleting SafariTabs.db under another process.** `SafariBookmarksSyncAgent` (a launchd job in the device) opens
+  SafariTabs.db a few seconds after boot. `safari-reset` deleted the files while it held them, so the agent kept
+  the deleted db while Safari made a new one; `lsof` on the host showed it in every run. Usually harmless, but in
+  one e2e run (2026-10-29) the db at the path lost every window and tab while three tabs were on screen, and
+  `--new-tab` failed with "Safari has 0, had 0". `safari-reset` now stops the agent (`launchctl stop` inside the
+  device) and waits for it to exit before deleting; launchd restarts it briefly, but it holds nothing at the delete.
 - **Background tabs.** They don't resize on rotation, and they kept polling under their name. Jobs went to
   whichever tab polled last: a test measured 834 wide in landscape from a hidden tab. Pages now poll only while
   visible, and calibration refuses hidden pages.
